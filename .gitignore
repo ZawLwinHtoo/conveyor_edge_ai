@@ -6,6 +6,7 @@ __pycache__/
 
 # Runtime log files
 detections.csv
+latest_frame.jpg
 
 # IDE / OS settings
 .vscode/

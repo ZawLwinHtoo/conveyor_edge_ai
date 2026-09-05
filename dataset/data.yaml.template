@@ -1,0 +1,15 @@
+# Conveyor Belt Defect Dataset Configuration
+# Replace paths with your actual dataset directories
+
+path: ./dataset # root directory
+train: images/train
+val: images/val
+test: images/test
+
+# Defect Classes (5 categories in English)
+names:
+  0: Large Hole
+  1: Small Hole
+  2: Belt Joint
+  3: Large Tear
+  4: Small Tear

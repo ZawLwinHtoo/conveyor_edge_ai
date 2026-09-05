@@ -112,28 +112,17 @@ Opening the dashboard automatically manages background services (`node2.py` and 
 
 You can choose your camera device directly inside the **⚙️ Camera Selection & Edge AI Control Center** at the top of the dashboard:
 
-### 1. 💻 PC / Laptop Built-in Webcam (Camera 0)
+### 1. 💻 Local Laptop Camera
 - **Setup**: None required!
-- **How to use**: Select **Option 1**, then click **▶️ Start AI Detection Node**.
+- **How to use**: Select **💻 Local Laptop Camera**, then click **▶️ Start AI Detection Node**.
 
-### 2. 📱 iPhone / DroidCam / External USB Camera (Camera 1)
-- **Best & Most Reliable Setup (DroidCam)**:
-  1. Download **DroidCam** (App Store on iPhone / Play Store on Android).
-  2. Download free **DroidCam Client for Windows** on your laptop from [dev47apps.com](https://www.dev47apps.com/).
-  3. Connect your phone to your PC via USB cable (or same Wi-Fi network).
-  4. Open DroidCam on both phone and PC, then click **Start**.
-  5. Select **Option 2: 📱 iPhone / DroidCam / USB Camera (Camera 1)** in the dashboard and click **▶️ Start AI Detection Node**.
-- *(Alternative for iPhone)*: Use **Camo App** (iPhone) + **Camo Studio** (Windows). *Note: Requires Microsoft Windows App SDK Runtime installed on Windows 10/11.*
-
-### 3. 🌐 Smartphone IP Camera Stream (HTTP URL)
-- **Step 1**: Connect Phone & PC to the **same Wi-Fi network**.
-- **Step 2 (Important)**: Turn **OFF** any VPN/Proxy (e.g. NekoBox, WARP, NordVPN) or iCloud Private Relay on your laptop and phone, as VPNs block local stream routing.
-- **Step 3 (App Setup)**:
-  - **iPhone**: Download **IP Camera Lite** or **DroidCam** (App Store). Tap *Start* and note the stream URL (e.g., `http://192.168.1.9:8081/video`).
-  - **Android**: Download **IP Webcam** (Play Store). Tap *Start server* and note the stream URL (e.g., `http://192.168.1.15:8080/video`).
-- **Step 4**: Test `http://<PHONE_IP>:8081/video` in your laptop browser first to confirm the stream is live.
-- **Step 5**: Paste the URL into **Option 3** in the dashboard and click **▶️ Start AI Detection Node**.
-
-### 4. ⚙️ Conveyor Belt Simulation Mode
-- **Setup**: No hardware or camera needed!
-- **How to use**: Select **Option 4: ⚙️ Conveyor Belt Simulation Mode** and click **▶️ Start AI Detection Node** to generate synthetic conveyor belt defect simulations automatically for testing.
+### 2. 📱 DroidCam (Phone Camera)
+- **Method A (Direct Wi-Fi IP - Easiest)**:
+  1. Open **DroidCam** on your iPhone or Android (must be on the same Wi-Fi network).
+  2. Select **📶 Wi-Fi IP Address** in the dashboard and enter the IP shown on your phone screen (e.g. `192.168.1.15:4747`).
+  3. Click **▶️ Start AI Detection Node**.
+- **Method B (USB / DroidCam PC Client)**:
+  1. Open **DroidCam** on your phone.
+  2. Open **DroidCam Client** on your PC (`C:\Program Files\DroidCam\Client\DroidCamApp.exe`).
+  3. Connect via USB or Wi-Fi and click **Start** in DroidCam Client.
+  4. Select **🔌 USB / DroidCam PC Client** in the dashboard and click **▶️ Start AI Detection Node**.

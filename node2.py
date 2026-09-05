@@ -56,7 +56,7 @@ def save_defect_log(message):
             message.get("bounding_box")
         ])
 
-    print("💾 Detection saved to detections.csv")
+    print("[LOG] Detection saved to detections.csv")
 
 
 # ============================================================
@@ -76,13 +76,13 @@ def trigger_alert(message):
     )
 
     print("\n" + "=" * 50)
-    print("🚨 DEFECT ALERT!")
+    print("[DEFECT ALERT]")
     print(f"Defect Type : {defect_type}")
     print(f"Confidence  : {confidence:.2f}")
     print("=" * 50)
 
     # Simulated alarm
-    print("🔔 [ALARM] Warning triggered!")
+    print("[ALARM] System alert triggered.")
 
 
 # ============================================================
@@ -116,7 +116,7 @@ def listen_for_alerts():
             )
 
             print(
-                "\n🚨 [MESH ALERT RECEIVED BY NODE 2]"
+                "\n[MESH ALERT] Received by Node 2"
             )
 
             print(message)
@@ -130,13 +130,13 @@ def listen_for_alerts():
         except json.JSONDecodeError:
 
             print(
-                "⚠️ Invalid JSON data received."
+                "[WARN] Invalid JSON data received."
             )
 
         except Exception as e:
 
             print(
-                f"⚠️ Error processing alert: {e}"
+                f"[ERROR] Error processing alert: {e}"
             )
 
 
