@@ -338,7 +338,7 @@ else:
 
 
 # ============================================================
-# GEOMETRIC DEFECT DISAMBIGUATION & REFINEMENT
+# HIGH-PRECISION HYBRID DEFECT CLASSIFICATION PIPELINE
 # ============================================================
 
 BOX_COLORS = {
@@ -349,53 +349,175 @@ BOX_COLORS = {
     "Belt Joint": (233, 165, 14),    # Sky Blue
 }
 
-def refine_defect_prediction(raw_label, confidence, bbox, frame_w, frame_h):
+def enhance_conveyor_contrast(img):
     """
-    Refines defect classification using geometric spatial metrics (aspect ratio, area, scale)
-    to correct model confusion between holes, tears, and belt joints.
+    Applies CLAHE on the luminance channel to normalize lighting, suppress glare,
+    and maximize optical contrast for faint tears, holes, and seam contours.
     """
+    try:
+        lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+        l_chan, a_chan, b_chan = cv2.split(lab)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        l_enhanced = clahe.apply(l_chan)
+        return cv2.cvtColor(cv2.merge((l_enhanced, a_chan, b_chan)), cv2.COLOR_LAB2BGR)
+    except Exception:
+        return img
+
+def analyze_defect_roi(frame, bbox):
+    """
+    Extracts physical morphological measurements directly from the pixel ROI:
+    - circularity (4*pi*area / perim^2): >0.40 indicates compact holes, <0.38 indicates tears/slits
+    - aspect ratio: width/height elongation
+    - actual contour defect area vs box extent
+    """
+    h_frame, w_frame = frame.shape[:2]
     x1, y1, x2, y2 = [int(v) for v in bbox[:4]]
-    w = max(1, abs(x2 - x1))
-    h = max(1, abs(y2 - y1))
-    area = w * h
-    aspect_ratio = w / float(h)
-    max_dim = max(w, h)
-    rel_width = w / float(frame_w) if frame_w > 0 else 0
+    x1 = max(0, min(w_frame - 1, x1))
+    x2 = max(0, min(w_frame - 1, x2))
+    y1 = max(0, min(h_frame - 1, y1))
+    y2 = max(0, min(h_frame - 1, y2))
 
-    # Normalization: standard label
-    label = LABEL_MAP.get(raw_label, raw_label)
+    bw = max(1, x2 - x1)
+    bh = max(1, y2 - y1)
+    box_area = bw * bh
+    box_aspect = bw / float(bh)
 
-    # 1. Belt Joint Detection:
-    # A belt joint typically spans horizontally across a significant width (aspect_ratio >= 2.5 or rel_width >= 0.30)
-    if label in ["Sambungan Belt", "Belt Joint"] or (aspect_ratio >= 2.8 and rel_width >= 0.30):
-        return "Belt Joint", confidence, [x1, y1, x2, y2]
+    roi = frame[y1:y2, x1:x2]
+    if roi.size == 0 or bw < 4 or bh < 4:
+        return {
+            "circularity": 0.5,
+            "contour_area": box_area * 0.5,
+            "box_area": box_area,
+            "box_aspect": box_aspect,
+            "max_dim": max(bw, bh),
+            "rel_width": bw / float(w_frame)
+        }
 
-    # 2. Tear Detection:
-    # Tears are elongated slits (aspect ratio >= 1.75 or aspect ratio <= 0.57)
-    is_elongated = (aspect_ratio >= 1.75 or aspect_ratio <= 0.57)
+    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
 
-    if is_elongated:
-        if area >= 3800 or max_dim >= 110:
-            refined_label = "Large Tear"
+    # Segment defect from belt surface using Otsu
+    _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    if cv2.countNonZero(thresh) > 0.85 * box_area:
+        _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if contours:
+        c = max(contours, key=cv2.contourArea)
+        c_area = cv2.contourArea(c)
+        c_perim = cv2.arcLength(c, True)
+        circ = (4.0 * np.pi * c_area) / (c_perim * c_perim) if c_perim > 0 else 0.0
+    else:
+        c_area = box_area * 0.5
+        circ = 0.5
+
+    return {
+        "circularity": circ,
+        "contour_area": c_area,
+        "box_area": box_area,
+        "box_aspect": box_aspect,
+        "max_dim": max(bw, bh),
+        "rel_width": bw / float(w_frame)
+    }
+
+def classify_defect_precisely(raw_label, confidence, bbox, frame):
+    """
+    Combines YOLO proposals with OpenCV morphological metrics to assign the exact
+    one of the 5 categories with high precision:
+    1. Belt Joint
+    2. Large Tear
+    3. Small Tear
+    4. Large Hole
+    5. Small Hole
+    """
+    metrics = analyze_defect_roi(frame, bbox)
+    x1, y1, x2, y2 = [int(v) for v in bbox[:4]]
+
+    circ = metrics["circularity"]
+    box_aspect = metrics["box_aspect"]
+    max_aspect = max(box_aspect, 1.0 / box_aspect)
+    c_area = metrics["contour_area"]
+    box_area = metrics["box_area"]
+    max_dim = metrics["max_dim"]
+    rel_w = metrics["rel_width"]
+
+    # 1. BELT JOINT:
+    # Horizontal seam spanning across a wide portion of the belt
+    if (box_aspect >= 2.5 and rel_w >= 0.25) or (raw_label in ["Sambungan Belt", "Belt Joint"] and box_aspect >= 2.0):
+        return "Belt Joint", min(0.95, max(confidence, 0.78)), [x1, y1, x2, y2]
+
+    # 2. TEAR vs HOLE:
+    # Tears are elongated, narrow slits (low circularity < 0.38 or high aspect ratio >= 1.65)
+    # Holes are compact, rounded shapes (circularity >= 0.38 and aspect ratio < 1.65)
+    is_tear = (max_aspect >= 1.65 or circ < 0.38)
+
+    if is_tear:
+        if max_dim >= 95 or c_area >= 2200 or box_area >= 4000:
+            assigned = "Large Tear"
         else:
-            refined_label = "Small Tear"
-        return refined_label, confidence, [x1, y1, x2, y2]
-
-    # 3. Hole Detection:
-    # Holes are compact / circular (0.57 < aspect ratio < 1.75)
-    if label in ["Sobekan Besar", "Large Tear", "Sobekan Kecil", "Small Tear"]:
-        if not is_elongated:
-            refined_label = "Large Hole" if (area >= 3800 or max_dim >= 100) else "Small Hole"
-            return refined_label, confidence, [x1, y1, x2, y2]
-
-    # 4. Hole size disambiguation based on area
-    if label in ["Lubang Besar", "Large Hole", "Lubang Kecil", "Small Hole"]:
-        if area >= 3800 or max_dim >= 100:
-            return "Large Hole", confidence, [x1, y1, x2, y2]
+            assigned = "Small Tear"
+    else:
+        if max_dim >= 80 or c_area >= 2400 or box_area >= 3800:
+            assigned = "Large Hole"
         else:
-            return "Small Hole", confidence, [x1, y1, x2, y2]
+            assigned = "Small Hole"
 
-    return label, confidence, [x1, y1, x2, y2]
+    # Calibration confidence boost when geometric features strongly confirm category
+    refined_conf = confidence
+    if assigned in ["Large Hole", "Small Hole"] and circ >= 0.50:
+        refined_conf = min(0.96, max(confidence, 0.75))
+    elif assigned in ["Large Tear", "Small Tear"] and max_aspect >= 1.8:
+        refined_conf = min(0.94, max(confidence, 0.72))
+
+    return assigned, refined_conf, [x1, y1, x2, y2]
+
+
+# Defect Track Smoothing across frames
+class DefectSmoother:
+    def __init__(self, history=4):
+        self.history = history
+        self.tracks = []  # list of {"box": [...], "votes": [label1, label2], "conf": float, "ttl": int}
+
+    def smooth(self, detections):
+        # detections: list of (label, conf, bbox)
+        smoothed = []
+        for label, conf, bbox in detections:
+            matched = False
+            bx1, by1, bx2, by2 = bbox
+            bcx = (bx1 + bx2) / 2.0
+            bcy = (by1 + by2) / 2.0
+
+            for t in self.tracks:
+                tx1, ty1, tx2, ty2 = t["box"]
+                tcx = (tx1 + tx2) / 2.0
+                tcy = (ty1 + ty2) / 2.0
+                dist = np.hypot(bcx - tcx, bcy - tcy)
+
+                if dist < 45.0:  # Same physical defect
+                    t["votes"].append(label)
+                    if len(t["votes"]) > self.history:
+                        t["votes"].pop(0)
+                    t["box"] = bbox
+                    t["conf"] = 0.7 * conf + 0.3 * t["conf"]
+                    t["ttl"] = 5
+                    # Majority vote
+                    maj_label = max(set(t["votes"]), key=t["votes"].count)
+                    smoothed.append((maj_label, t["conf"], bbox))
+                    matched = True
+                    break
+
+            if not matched:
+                self.tracks.append({"box": bbox, "votes": [label], "conf": conf, "ttl": 5})
+                smoothed.append((label, conf, bbox))
+
+        # Decay inactive tracks
+        self.tracks = [t for t in self.tracks if t["ttl"] > 0]
+        for t in self.tracks:
+            t["ttl"] -= 1
+
+        return smoothed
+
+smoother = DefectSmoother(history=4)
 
 
 # ============================================================
@@ -449,39 +571,45 @@ while True:
             )
             annotated_frame = frame
         else:
+            # Contrast normalize the frame so tears, holes, and joints pop out
+            enhanced_frame = enhance_conveyor_contrast(frame)
+
             # Query model with slight headroom so lower-confidence tears & belt joints are captured
             effective_conf = min(CONF_THRESHOLD, 0.16)
             results = model(
-                frame,
+                enhanced_frame,
                 conf=effective_conf,
-                iou=0.40,
+                iou=0.35,
+                agnostic_nms=True,
                 imgsz=640,
                 augment=USE_AUGMENT,
                 verbose=False
             )
 
-            annotated_frame = frame.copy()
-
+            raw_detections = []
             for result in results[0].boxes:
                 cls_id = int(result.cls[0])
                 raw_label = model.names[cls_id]
                 confidence = float(result.conf[0])
                 raw_bbox = result.xyxy[0].tolist()
 
-                # Apply geometric refinement
-                refined_label, confidence, bbox = refine_defect_prediction(
+                # High-precision morphological verification
+                assigned_label, confidence, bbox = classify_defect_precisely(
                     raw_label,
                     confidence,
                     raw_bbox,
-                    frame.shape[1],
-                    frame.shape[0]
+                    frame
                 )
 
-                # Class-specific threshold: tears and belt joints accept >= 0.18, holes use CONF_THRESHOLD
-                required_conf = 0.18 if "Tear" in refined_label or "Joint" in refined_label else CONF_THRESHOLD
-                if confidence < required_conf:
-                    continue
+                required_conf = 0.18 if ("Tear" in assigned_label or "Joint" in assigned_label) else CONF_THRESHOLD
+                if confidence >= required_conf:
+                    raw_detections.append((assigned_label, confidence, bbox))
 
+            # Temporal smoothing prevents flicker between classes
+            stable_detections = smoother.smooth(raw_detections)
+            annotated_frame = frame.copy()
+
+            for refined_label, confidence, bbox in stable_detections:
                 # Match target defect filter (ALL detects any defect class)
                 is_target = (
                     TARGET_OBJECT.upper() == "ALL" or
