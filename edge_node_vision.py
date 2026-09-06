@@ -472,11 +472,51 @@ def classify_defect_precisely(raw_label, confidence, bbox, frame):
     return assigned, refined_conf, [x1, y1, x2, y2]
 
 
-# Defect Track Smoothing across frames
+def is_genuine_defect_present(frame, bbox):
+    """
+    Physical verification filter: checks if the proposed bounding box contains an authentic
+    flaw with genuine texture variance and edge contours, or is just a flat wall, empty
+    surface, shadow, or camera compression noise. Rejects false alarms.
+    """
+    x1, y1, x2, y2 = [int(v) for v in bbox[:4]]
+    h_f, w_f = frame.shape[:2]
+    x1 = max(0, min(w_f - 1, x1))
+    x2 = max(0, min(w_f - 1, x2))
+    y1 = max(0, min(h_f - 1, y1))
+    y2 = max(0, min(h_f - 1, y2))
+
+    bw = x2 - x1
+    bh = y2 - y1
+    if bw < 16 or bh < 16 or (bw * bh) < 320:
+        return False  # Reject tiny sub-pixel sensor noise
+
+    roi = frame[y1:y2, x1:x2]
+    if roi.size == 0:
+        return False
+
+    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+
+    # 1. Texture variance check: flat surfaces/shadows have very low std (< 10)
+    roi_std = np.std(gray)
+    if roi_std < 9.5:
+        return False  # Flat, uniform surface, no true physical defect
+
+    # 2. Structural edge presence: genuine defects have visible boundaries
+    edges = cv2.Canny(gray, 40, 140)
+    edge_count = np.count_nonzero(edges)
+    min_edges_required = max(14, int((bw + bh) * 0.30))
+    if edge_count < min_edges_required:
+        return False  # Lacks physical flaw boundary lines
+
+    return True
+
+
+# Defect Track Smoothing & False-Positive Ghost Elimination
 class DefectSmoother:
-    def __init__(self, history=4):
+    def __init__(self, history=5, min_hits=2):
         self.history = history
-        self.tracks = []  # list of {"box": [...], "votes": [label1, label2], "conf": float, "ttl": int}
+        self.min_hits = min_hits
+        self.tracks = []  # list of {"box": [...], "votes": [label1, label2], "conf": float, "hits": int, "ttl": int}
 
     def smooth(self, detections):
         # detections: list of (label, conf, bbox)
@@ -493,22 +533,25 @@ class DefectSmoother:
                 tcy = (ty1 + ty2) / 2.0
                 dist = np.hypot(bcx - tcx, bcy - tcy)
 
-                if dist < 45.0:  # Same physical defect
+                if dist < 50.0:  # Same physical defect
                     t["votes"].append(label)
                     if len(t["votes"]) > self.history:
                         t["votes"].pop(0)
                     t["box"] = bbox
                     t["conf"] = 0.7 * conf + 0.3 * t["conf"]
-                    t["ttl"] = 5
-                    # Majority vote
-                    maj_label = max(set(t["votes"]), key=t["votes"].count)
-                    smoothed.append((maj_label, t["conf"], bbox))
+                    t["hits"] += 1
+                    t["ttl"] = 6
+
+                    # Only report detection once confirmed across at least min_hits frames
+                    if t["hits"] >= self.min_hits:
+                        maj_label = max(set(t["votes"]), key=t["votes"].count)
+                        smoothed.append((maj_label, t["conf"], bbox))
                     matched = True
                     break
 
             if not matched:
-                self.tracks.append({"box": bbox, "votes": [label], "conf": conf, "ttl": 5})
-                smoothed.append((label, conf, bbox))
+                # First frame: register candidate, but wait for next frame to confirm (anti-ghost filter)
+                self.tracks.append({"box": bbox, "votes": [label], "conf": conf, "hits": 1, "ttl": 6})
 
         # Decay inactive tracks
         self.tracks = [t for t in self.tracks if t["ttl"] > 0]
@@ -517,7 +560,7 @@ class DefectSmoother:
 
         return smoothed
 
-smoother = DefectSmoother(history=4)
+smoother = DefectSmoother(history=5, min_hits=2)
 
 
 # ============================================================
@@ -575,7 +618,7 @@ while True:
             enhanced_frame = enhance_conveyor_contrast(frame)
 
             # Query model with slight headroom so lower-confidence tears & belt joints are captured
-            effective_conf = min(CONF_THRESHOLD, 0.16)
+            effective_conf = min(CONF_THRESHOLD, 0.18)
             results = model(
                 enhanced_frame,
                 conf=effective_conf,
@@ -593,7 +636,11 @@ while True:
                 confidence = float(result.conf[0])
                 raw_bbox = result.xyxy[0].tolist()
 
-                # High-precision morphological verification
+                # Step 1: Physical texture & edge truth check (rejects flat walls/shadows)
+                if not is_genuine_defect_present(frame, raw_bbox):
+                    continue
+
+                # Step 2: High-precision morphological verification
                 assigned_label, confidence, bbox = classify_defect_precisely(
                     raw_label,
                     confidence,
@@ -601,11 +648,11 @@ while True:
                     frame
                 )
 
-                required_conf = 0.18 if ("Tear" in assigned_label or "Joint" in assigned_label) else CONF_THRESHOLD
+                required_conf = 0.20 if ("Tear" in assigned_label or "Joint" in assigned_label) else max(CONF_THRESHOLD, 0.22)
                 if confidence >= required_conf:
                     raw_detections.append((assigned_label, confidence, bbox))
 
-            # Temporal smoothing prevents flicker between classes
+            # Step 3: Multi-frame persistence gating (eliminates 1-frame ghost glitches)
             stable_detections = smoother.smooth(raw_detections)
             annotated_frame = frame.copy()
 
