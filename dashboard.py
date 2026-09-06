@@ -6,8 +6,20 @@ import subprocess
 import sys
 import altair as alt
 import ast
+import base64
 
 PYTHON_EXE = sys.executable
+
+@st.cache_data
+def get_logo_base64():
+    logo_path = os.path.join(os.path.dirname(__file__), "assets", "logo.jpg")
+    if os.path.exists(logo_path):
+        try:
+            with open(logo_path, "rb") as f:
+                return base64.b64encode(f.read()).decode("utf-8")
+        except Exception:
+            pass
+    return ""
 
 LABEL_MAP = {
     "Lubang Besar": "Large Hole",
@@ -144,15 +156,16 @@ st.markdown(
     }
 
     .brand-badge {
-        width: 38px;
-        height: 38px;
+        width: 44px;
+        height: 44px;
         background: #1e293b;
         border: 1px solid #334155;
         border-radius: 8px;
         display: flex;
         align-items: center;
         justify-content: center;
-        color: #38bdf8;
+        overflow: hidden;
+        flex-shrink: 0;
     }
 
     .brand-headings h1 {
@@ -868,15 +881,17 @@ def main():
     v_led = "led-online" if v_active else "led-offline"
     n_led = "led-online" if n_active else "led-offline"
 
+    logo_b64 = get_logo_base64()
+    if logo_b64:
+        logo_html = f'<img src="data:image/jpeg;base64,{logo_b64}" style="width:100%; height:100%; object-fit:cover; display:block;" alt="Conveyor Logo">'
+    else:
+        logo_html = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#38bdf8" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>'
+
     st.html(f"""
     <div class="top-bar">
         <div class="brand-section">
             <div class="brand-badge">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <rect x="2" y="3" width="20" height="14" rx="2"></rect>
-                    <line x1="8" y1="21" x2="16" y2="21"></line>
-                    <line x1="12" y1="17" x2="12" y2="21"></line>
-                </svg>
+                {logo_html}
             </div>
             <div class="brand-headings">
                 <h1>Conveyor Belt Quality Monitor</h1>
