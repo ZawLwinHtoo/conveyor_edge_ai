@@ -5,6 +5,7 @@ import textwrap
 import subprocess
 import sys
 import altair as alt
+import ast
 
 PYTHON_EXE = sys.executable
 
@@ -308,14 +309,18 @@ st.markdown(
         color: var(--text-primary);
     }
 
-    /* Clean Modern Table */
+    /* Clean Modern Table - Full Width Fixed Distribution */
     .neat-table-wrap {
         width: 100%;
         overflow-x: auto;
+        background: var(--card-bg);
+        border: 1px solid var(--card-border);
+        border-radius: 8px;
     }
 
     .neat-table {
         width: 100%;
+        table-layout: fixed;
         border-collapse: collapse;
         font-size: 13px;
         text-align: left;
@@ -328,14 +333,19 @@ st.markdown(
         font-size: 11px;
         text-transform: uppercase;
         letter-spacing: 0.05em;
-        padding: 10px 16px;
+        padding: 12px 16px;
         border-bottom: 1px solid var(--card-border);
+        white-space: nowrap;
     }
 
     .neat-table td {
-        padding: 11px 16px;
+        padding: 12px 16px;
         border-bottom: 1px solid #1a2233;
         color: var(--text-primary);
+        vertical-align: middle;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
     }
 
     .neat-table tr:last-child td {
@@ -360,6 +370,7 @@ st.markdown(
         padding: 3px 8px;
         border-radius: 4px;
         display: inline-block;
+        white-space: nowrap;
     }
 
     .defect-red { background: rgba(244, 63, 94, 0.15); color: #fb7185; border: 1px solid rgba(244, 63, 94, 0.3); }
@@ -367,6 +378,21 @@ st.markdown(
     .defect-orange { background: rgba(249, 115, 22, 0.15); color: #fdba74; border: 1px solid rgba(249, 115, 22, 0.3); }
     .defect-purple { background: rgba(168, 85, 247, 0.15); color: #d8b4fe; border: 1px solid rgba(168, 85, 247, 0.3); }
     .defect-sky { background: rgba(14, 165, 233, 0.15); color: #7dd3fc; border: 1px solid rgba(14, 165, 233, 0.3); }
+
+    /* Action Status Tags */
+    .status-tag {
+        font-family: var(--font-mono);
+        font-size: 11px;
+        font-weight: 600;
+        padding: 3px 8px;
+        border-radius: 4px;
+        display: inline-block;
+        white-space: nowrap;
+    }
+    .tag-critical { background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); }
+    .tag-warning { background: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.3); }
+    .tag-info { background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3); }
+    .tag-neutral { background: rgba(100, 116, 139, 0.15); color: #94a3b8; border: 1px solid rgba(100, 116, 139, 0.3); }
 
     /* Button Polish */
     div[data-testid="stButton"] button {
@@ -575,6 +601,31 @@ def get_badge(defect_type):
         return f'<span class="defect-badge defect-sky">{defect_type}</span>'
     return f'<span class="defect-badge">{defect_type}</span>'
 
+def parse_bbox_details(bbox_str):
+    try:
+        if isinstance(bbox_str, (list, tuple)):
+            coords = bbox_str
+        else:
+            s = str(bbox_str).strip()
+            coords = ast.literal_eval(s)
+        if isinstance(coords, (list, tuple)) and len(coords) >= 4:
+            x1, y1, x2, y2 = [int(float(c)) for c in coords[:4]]
+            w = abs(x2 - x1)
+            h = abs(y2 - y1)
+            return f"{w} × {h} px", f"[{x1}, {y1}, {x2}, {y2}]"
+    except Exception:
+        pass
+    return "-", str(bbox_str)
+
+def get_status_badge(defect_type):
+    if defect_type in ["Large Hole", "Large Tear"]:
+        return '<span class="status-tag tag-critical">Critical Action</span>'
+    elif defect_type in ["Small Hole", "Small Tear"]:
+        return '<span class="status-tag tag-warning">Surface Flaw</span>'
+    elif defect_type == "Belt Joint":
+        return '<span class="status-tag tag-info">Belt Splice</span>'
+    return '<span class="status-tag tag-neutral">Inspected</span>'
+
 def render_table_html(df_subset):
     if df_subset.empty:
         return "<div style='color:#64748b; font-size:13px; padding:18px;'>No defect events recorded yet.</div>"
@@ -589,17 +640,31 @@ def render_table_html(df_subset):
 
         defect = str(row.get("Defect Type", ""))
         conf = row.get("Confidence", 0.0)
-        conf_str = f"{conf * 100:.1f}%" if isinstance(conf, (int, float)) else str(conf)
+        try:
+            conf_num = float(conf) * 100.0
+        except Exception:
+            conf_num = 0.0
+        conf_str = f"{conf_num:.1f}%"
         sender = str(row.get("Sender ID", "Node 1 (Camera)"))
-        bbox = str(row.get("Bounding Box", "[]"))
+        dims, bbox_clean = parse_bbox_details(row.get("Bounding Box", "[]"))
+        status_badge = get_status_badge(defect)
 
         rows.append(f"""
         <tr>
-            <td class="font-mono">{ts}</td>
+            <td class="font-mono" style="color:#94a3b8;">{ts}</td>
             <td>{get_badge(defect)}</td>
-            <td class="font-mono">{conf_str}</td>
+            <td>
+                <div style="display:flex; align-items:center; gap:8px;">
+                    <span class="font-mono" style="min-width:44px; color:#f8fafc;">{conf_str}</span>
+                    <div style="flex:1; max-width:80px; height:5px; background:#1e293b; border-radius:3px; overflow:hidden;">
+                        <div style="width:{min(100, max(0, int(conf_num)))}%; height:100%; background:#3b82f6; border-radius:3px;"></div>
+                    </div>
+                </div>
+            </td>
+            <td class="font-mono" style="color:#38bdf8;">{dims}</td>
             <td style="color:#94a3b8;">{sender}</td>
-            <td class="font-mono" style="color:#cbd5e1;">{bbox}</td>
+            <td class="font-mono" style="color:#cbd5e1; font-size:11px;">{bbox_clean}</td>
+            <td>{status_badge}</td>
         </tr>
         """)
 
@@ -608,11 +673,13 @@ def render_table_html(df_subset):
         <table class="neat-table">
             <thead>
                 <tr>
-                    <th style="width: 100px;">Timestamp</th>
-                    <th style="width: 140px;">Defect Type</th>
-                    <th style="width: 110px;">Certainty</th>
-                    <th style="width: 130px;">Source Node</th>
-                    <th>Bounding Box Coordinates</th>
+                    <th style="width: 11%;">Timestamp</th>
+                    <th style="width: 15%;">Defect Type</th>
+                    <th style="width: 16%;">Certainty</th>
+                    <th style="width: 14%;">Flaw Dimensions</th>
+                    <th style="width: 14%;">Source Node</th>
+                    <th style="width: 16%;">Bounding Box</th>
+                    <th style="width: 14%;">System Action</th>
                 </tr>
             </thead>
             <tbody>
