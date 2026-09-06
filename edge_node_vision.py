@@ -565,7 +565,7 @@ while True:
 
     # Display on-screen instructions & live HUD
     tta_status = "ON" if USE_AUGMENT else "OFF"
-    hud_text = f"Conf: {int(CONF_THRESHOLD * 100)}% [+/-] | TTA Boost: {tta_status} [T] | [C] Capture | [Q] Quit"
+    hud_text = f"Confidence: {int(CONF_THRESHOLD * 100)}% [+/-] | Deep Scan: {tta_status} [T] | [C] Photo | [Q] Exit"
     cv2.putText(
         annotated_frame,
         hud_text,

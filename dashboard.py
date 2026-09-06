@@ -619,12 +619,12 @@ def parse_bbox_details(bbox_str):
 
 def get_status_badge(defect_type):
     if defect_type in ["Large Hole", "Large Tear"]:
-        return '<span class="status-tag tag-critical">Critical Action</span>'
+        return '<span class="status-tag tag-critical">Critical Defect</span>'
     elif defect_type in ["Small Hole", "Small Tear"]:
-        return '<span class="status-tag tag-warning">Surface Flaw</span>'
+        return '<span class="status-tag tag-warning">Minor Flaw</span>'
     elif defect_type == "Belt Joint":
-        return '<span class="status-tag tag-info">Belt Splice</span>'
-    return '<span class="status-tag tag-neutral">Inspected</span>'
+        return '<span class="status-tag tag-info">Belt Joint</span>'
+    return '<span class="status-tag tag-neutral">Recorded</span>'
 
 def render_table_html(df_subset):
     if df_subset.empty:
@@ -645,7 +645,7 @@ def render_table_html(df_subset):
         except Exception:
             conf_num = 0.0
         conf_str = f"{conf_num:.1f}%"
-        sender = str(row.get("Sender ID", "Node 1 (Camera)"))
+        sender = str(row.get("Sender ID", "Camera 1"))
         dims, bbox_clean = parse_bbox_details(row.get("Bounding Box", "[]"))
         status_badge = get_status_badge(defect)
 
@@ -673,13 +673,13 @@ def render_table_html(df_subset):
         <table class="neat-table">
             <thead>
                 <tr>
-                    <th style="width: 11%;">Timestamp</th>
+                    <th style="width: 11%;">Time</th>
                     <th style="width: 15%;">Defect Type</th>
-                    <th style="width: 16%;">Certainty</th>
-                    <th style="width: 14%;">Flaw Dimensions</th>
-                    <th style="width: 14%;">Source Node</th>
-                    <th style="width: 16%;">Bounding Box</th>
-                    <th style="width: 14%;">System Action</th>
+                    <th style="width: 16%;">Confidence</th>
+                    <th style="width: 14%;">Defect Size</th>
+                    <th style="width: 14%;">Camera</th>
+                    <th style="width: 16%;">Box Position</th>
+                    <th style="width: 14%;">Status</th>
                 </tr>
             </thead>
             <tbody>
@@ -820,7 +820,7 @@ def main():
         ) / 100.0
 
         enable_tta = st.checkbox(
-            "Multi-Pass Inference (TTA)",
+            "Deep Scan Mode (High Accuracy)",
             value=st.session_state.get("vision_augment", False),
             key="side_tta_check"
         )
@@ -839,21 +839,21 @@ def main():
                 st.rerun()
 
         if not n_active:
-            if st.button("Start Defect Logger", key="btn_start_logger", use_container_width=True):
+            if st.button("Start Defect Recorder", key="btn_start_logger", use_container_width=True):
                 start_node2()
                 st.rerun()
         else:
-            if st.button("Restart Defect Logger", key="btn_restart_logger", use_container_width=True):
+            if st.button("Restart Defect Recorder", key="btn_restart_logger", use_container_width=True):
                 stop_node2()
                 start_node2()
                 st.rerun()
 
         st.markdown('<div style="height:6px;"></div>', unsafe_allow_html=True)
-        if st.button("Refresh Telemetry Data", key="btn_refresh_data", use_container_width=True):
+        if st.button("Reload Defect Records", key="btn_refresh_data", use_container_width=True):
             st.rerun()
 
         st.markdown('<div style="height:10px;"></div>', unsafe_allow_html=True)
-        if st.button("Open Defect Test Targets", key="btn_open_test_targets", use_container_width=True):
+        if st.button("Open Defect Test Cards", key="btn_open_test_targets", use_container_width=True):
             test_path = os.path.abspath("test_defects.html")
             import webbrowser
             webbrowser.open(f"file:///{test_path}")
@@ -880,17 +880,17 @@ def main():
             </div>
             <div class="brand-headings">
                 <h1>Conveyor Belt Quality Monitor</h1>
-                <p>Surface Integrity &amp; Optical Flaw Detection</p>
+                <p>Real-Time Conveyor Defect Inspection</p>
             </div>
         </div>
         <div class="status-badges">
             <div class="status-pill">
                 <span class="led-circle {v_led}"></span>
-                <span>Camera Node: <b>{v_status}</b></span>
+                <span>Camera: <b>{v_status}</b></span>
             </div>
             <div class="status-pill">
                 <span class="led-circle {n_led}"></span>
-                <span>Defect Logger: <b>{n_status}</b></span>
+                <span>Recorder: <b>{n_status}</b></span>
             </div>
         </div>
     </div>
@@ -903,7 +903,7 @@ def main():
             <div class="content-box-header">
                 <div style="display:flex; align-items:center; gap:8px;">
                     <span class="led-circle led-online"></span>
-                    <span>Live Camera Inspection Monitor (Real-Time Edge AI)</span>
+                    <span>Live Camera View (Defect Detection)</span>
                 </div>
                 <span style="font-size:11px; color:#10b981; font-family:var(--font-mono); font-weight:600;">ACTIVE STREAM &bull; PORT 5014</span>
             </div>
@@ -921,7 +921,7 @@ def main():
             <div class="content-box-header">
                 <div style="display:flex; align-items:center; gap:8px;">
                     <span class="led-circle led-offline"></span>
-                    <span>Live Camera Inspection Monitor</span>
+                    <span>Live Camera View</span>
                 </div>
                 <span style="font-size:11px; color:#64748b; font-weight:500;">CAMERA OFFLINE</span>
             </div>
@@ -932,7 +932,7 @@ def main():
                     <line x1="12" y1="17" x2="12" y2="21"></line>
                 </svg>
                 <div style="font-size:14px; color:#94a3b8; font-weight:600;">Camera inspection feed is offline</div>
-                <div style="font-size:12px; color:#64748b; text-align:center;">Click <b>Start Inspection Camera</b> in the left sidebar to stream live video with defect detection</div>
+                <div style="font-size:12px; color:#64748b; text-align:center;">Click <b>Start Inspection Camera</b> in the left sidebar to start live video</div>
             </div>
         </div>
         """)
@@ -987,9 +987,9 @@ def render_live_telemetry():
     with k4:
         st.html(f"""
         <div class="metric-card">
-            <div class="metric-label">Mean Certainty</div>
+            <div class="metric-label">Average Confidence</div>
             <div class="metric-value">{avg_conf:.1%}</div>
-            <div class="metric-footer">Average model certainty</div>
+            <div class="metric-footer">Detection accuracy score</div>
         </div>
         """)
 
@@ -1009,7 +1009,7 @@ def render_live_telemetry():
         st.html(f"""
         <div class="content-box">
             <div class="content-box-header">
-                <span>Defect Breakdown by Classification</span>
+                <span>Defects by Category</span>
                 <span style="font-size:11px; color:#64748b; font-weight:500;">{total_defects} Total</span>
             </div>
             <div class="content-box-body">
@@ -1047,8 +1047,8 @@ def render_live_telemetry():
             st.html("""
             <div class="content-box">
                 <div class="content-box-header">
-                    <span>Certainty Trend Over Time</span>
-                    <span style="font-size:11px; color:#64748b; font-weight:500;">Per-Event Confidence</span>
+                    <span>Confidence Trend Over Time</span>
+                    <span style="font-size:11px; color:#64748b; font-weight:500;">Recent Detection Scores</span>
                 </div>
             </div>
             """)
@@ -1064,8 +1064,8 @@ def render_live_telemetry():
     st.html("""
     <div class="content-box" style="margin-bottom:12px;">
         <div class="content-box-header">
-            <span>Recent Detection Activity</span>
-            <span style="font-size:11px; color:#64748b; font-weight:500;">Latest Logged Events</span>
+            <span>Recent Defect History</span>
+            <span style="font-size:11px; color:#64748b; font-weight:500;">Latest Recorded Flaws</span>
         </div>
     </div>
     """)
