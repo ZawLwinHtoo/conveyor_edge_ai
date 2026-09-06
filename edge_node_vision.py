@@ -338,6 +338,67 @@ else:
 
 
 # ============================================================
+# GEOMETRIC DEFECT DISAMBIGUATION & REFINEMENT
+# ============================================================
+
+BOX_COLORS = {
+    "Large Hole": (68, 63, 244),     # Red
+    "Small Hole": (11, 158, 245),    # Amber
+    "Large Tear": (22, 115, 249),    # Orange
+    "Small Tear": (247, 85, 168),    # Purple
+    "Belt Joint": (233, 165, 14),    # Sky Blue
+}
+
+def refine_defect_prediction(raw_label, confidence, bbox, frame_w, frame_h):
+    """
+    Refines defect classification using geometric spatial metrics (aspect ratio, area, scale)
+    to correct model confusion between holes, tears, and belt joints.
+    """
+    x1, y1, x2, y2 = [int(v) for v in bbox[:4]]
+    w = max(1, abs(x2 - x1))
+    h = max(1, abs(y2 - y1))
+    area = w * h
+    aspect_ratio = w / float(h)
+    max_dim = max(w, h)
+    rel_width = w / float(frame_w) if frame_w > 0 else 0
+
+    # Normalization: standard label
+    label = LABEL_MAP.get(raw_label, raw_label)
+
+    # 1. Belt Joint Detection:
+    # A belt joint typically spans horizontally across a significant width (aspect_ratio >= 2.5 or rel_width >= 0.30)
+    if label in ["Sambungan Belt", "Belt Joint"] or (aspect_ratio >= 2.8 and rel_width >= 0.30):
+        return "Belt Joint", confidence, [x1, y1, x2, y2]
+
+    # 2. Tear Detection:
+    # Tears are elongated slits (aspect ratio >= 1.75 or aspect ratio <= 0.57)
+    is_elongated = (aspect_ratio >= 1.75 or aspect_ratio <= 0.57)
+
+    if is_elongated:
+        if area >= 3800 or max_dim >= 110:
+            refined_label = "Large Tear"
+        else:
+            refined_label = "Small Tear"
+        return refined_label, confidence, [x1, y1, x2, y2]
+
+    # 3. Hole Detection:
+    # Holes are compact / circular (0.57 < aspect ratio < 1.75)
+    if label in ["Sobekan Besar", "Large Tear", "Sobekan Kecil", "Small Tear"]:
+        if not is_elongated:
+            refined_label = "Large Hole" if (area >= 3800 or max_dim >= 100) else "Small Hole"
+            return refined_label, confidence, [x1, y1, x2, y2]
+
+    # 4. Hole size disambiguation based on area
+    if label in ["Lubang Besar", "Large Hole", "Lubang Kecil", "Small Hole"]:
+        if area >= 3800 or max_dim >= 100:
+            return "Large Hole", confidence, [x1, y1, x2, y2]
+        else:
+            return "Small Hole", confidence, [x1, y1, x2, y2]
+
+    return label, confidence, [x1, y1, x2, y2]
+
+
+# ============================================================
 # ALERT CONTROL
 # ============================================================
 
@@ -388,34 +449,62 @@ while True:
             )
             annotated_frame = frame
         else:
+            # Query model with slight headroom so lower-confidence tears & belt joints are captured
+            effective_conf = min(CONF_THRESHOLD, 0.16)
             results = model(
                 frame,
-                conf=CONF_THRESHOLD,
-                iou=0.45,
+                conf=effective_conf,
+                iou=0.40,
                 imgsz=640,
                 augment=USE_AUGMENT,
                 verbose=False
             )
 
-            annotated_frame = results[0].plot()
+            annotated_frame = frame.copy()
 
             for result in results[0].boxes:
                 cls_id = int(result.cls[0])
-                label = model.names[cls_id]
+                raw_label = model.names[cls_id]
                 confidence = float(result.conf[0])
-                bbox = result.xyxy[0].tolist()
+                raw_bbox = result.xyxy[0].tolist()
+
+                # Apply geometric refinement
+                refined_label, confidence, bbox = refine_defect_prediction(
+                    raw_label,
+                    confidence,
+                    raw_bbox,
+                    frame.shape[1],
+                    frame.shape[0]
+                )
+
+                # Class-specific threshold: tears and belt joints accept >= 0.18, holes use CONF_THRESHOLD
+                required_conf = 0.18 if "Tear" in refined_label or "Joint" in refined_label else CONF_THRESHOLD
+                if confidence < required_conf:
+                    continue
 
                 # Match target defect filter (ALL detects any defect class)
                 is_target = (
                     TARGET_OBJECT.upper() == "ALL" or
-                    label.strip().lower() == TARGET_OBJECT.strip().lower()
+                    refined_label.strip().lower() == TARGET_OBJECT.strip().lower()
                 )
 
-                if is_target and confidence >= CONF_THRESHOLD:
+                if is_target:
+                    # Draw neat custom bounding box
+                    x1, y1, x2, y2 = bbox
+                    color = BOX_COLORS.get(refined_label, (0, 255, 0))
+                    cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), color, 2)
+
+                    # Label background pill
+                    label_text = f"{refined_label} {int(confidence * 100)}%"
+                    (tw, th), _ = cv2.getTextSize(label_text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+                    py1 = max(0, y1 - th - 8)
+                    cv2.rectangle(annotated_frame, (x1, py1), (x1 + tw + 8, y1), color, -1)
+                    cv2.putText(annotated_frame, label_text, (x1 + 4, y1 - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+
                     current_time = time.time()
-                    if current_time - last_alert_times.get(label, 0) >= ALERT_COOLDOWN:
-                        broadcast_defect_alert(label, confidence, bbox)
-                        last_alert_times[label] = current_time
+                    if current_time - last_alert_times.get(refined_label, 0) >= ALERT_COOLDOWN:
+                        broadcast_defect_alert(refined_label, confidence, bbox)
+                        last_alert_times[refined_label] = current_time
 
     else:
         # Generate synthetic conveyor belt frame (640x480)
