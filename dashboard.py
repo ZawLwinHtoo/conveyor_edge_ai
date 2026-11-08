@@ -9,6 +9,7 @@ import ast
 import base64
 
 PYTHON_EXE = sys.executable
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 @st.cache_data
 def get_logo_base64():
@@ -443,7 +444,7 @@ st.markdown(
 # PROCESS MANAGEMENT & UTILITIES
 # ============================================================
 
-DATA_FILE = "detections.csv"
+DATA_FILE = os.path.join(BASE_DIR, "detections.csv")
 ROWS_PER_PAGE = 10
 
 def is_proc_active(proc):
@@ -474,7 +475,6 @@ def is_port_in_use(port):
         except OSError:
             return True
 
-import psutil
 
 def is_node2_active():
     if is_proc_active(st.session_state.get("node2_proc")):
@@ -482,49 +482,24 @@ def is_node2_active():
     return is_port_in_use(5012)
 
 def is_vision_active():
-    if is_proc_active(st.session_state.get("vision_proc")):
-        return True
-    try:
-        for p in psutil.process_iter(["name", "cmdline"]):
-            try:
-                if "python" in (p.info.get("name") or "").lower():
-                    cmdline = " ".join(p.info.get("cmdline") or []).lower()
-                    if "edge_node_vision.py" in cmdline:
-                        return True
-            except Exception:
-                continue
-    except Exception:
-        pass
-    return False
+    return is_proc_active(st.session_state.get("vision_proc"))
+
 
 def start_node2():
     if not is_node2_active():
-        flags = subprocess.CREATE_NEW_CONSOLE if sys.platform == "win32" else 0
+        flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
         st.session_state.node2_proc = subprocess.Popen(
             [PYTHON_EXE, "node2.py"],
-            cwd=os.getcwd(),
+            cwd=BASE_DIR,
             creationflags=flags
         )
 
 def stop_node2():
-    if is_proc_active(st.session_state.get("node2_proc")):
-        kill_proc_tree(st.session_state.node2_proc)
-        st.session_state.node2_proc = None
+    process = st.session_state.get("node2_proc")
+    if is_proc_active(process):
+        kill_proc_tree(process)
+    st.session_state.node2_proc = None
 
-    try:
-        current_pid = os.getpid()
-        for p in psutil.process_iter(["pid", "name", "cmdline"]):
-            try:
-                if p.info.get("pid") == current_pid:
-                    continue
-                if "python" in (p.info.get("name") or "").lower():
-                    cmdline = " ".join(p.info.get("cmdline") or []).lower()
-                    if "node2.py" in cmdline:
-                        p.kill()
-            except Exception:
-                continue
-    except Exception:
-        pass
 
 def start_vision(source_val, target_val="ALL", conf_val=0.20, augment=False):
     stop_vision()
@@ -536,15 +511,16 @@ def start_vision(source_val, target_val="ALL", conf_val=0.20, augment=False):
         "--target",
         str(target_val),
         "--conf",
-        str(conf_val)
+        str(conf_val),
+        "--headless"
     ]
     if augment:
         cmd.append("--augment")
 
-    flags = subprocess.CREATE_NEW_CONSOLE if sys.platform == "win32" else 0
+    flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
     st.session_state.vision_proc = subprocess.Popen(
         cmd,
-        cwd=os.getcwd(),
+        cwd=BASE_DIR,
         creationflags=flags
     )
     st.session_state.vision_source = str(source_val)
@@ -553,24 +529,11 @@ def start_vision(source_val, target_val="ALL", conf_val=0.20, augment=False):
     st.session_state.vision_augment = bool(augment)
 
 def stop_vision():
-    if is_proc_active(st.session_state.get("vision_proc")):
-        kill_proc_tree(st.session_state.vision_proc)
-        st.session_state.vision_proc = None
+    process = st.session_state.get("vision_proc")
+    if is_proc_active(process):
+        kill_proc_tree(process)
+    st.session_state.vision_proc = None
 
-    try:
-        current_pid = os.getpid()
-        for p in psutil.process_iter(["pid", "name", "cmdline"]):
-            try:
-                if p.info.get("pid") == current_pid:
-                    continue
-                if "python" in (p.info.get("name") or "").lower():
-                    cmdline = " ".join(p.info.get("cmdline") or []).lower()
-                    if "edge_node_vision.py" in cmdline:
-                        p.kill()
-            except Exception:
-                continue
-    except Exception:
-        pass
 
 def init_state():
     if "recent_page_number" not in st.session_state:
@@ -774,13 +737,17 @@ def main():
             "Camera Device:",
             options=[
                 "Laptop Camera (Integrated)",
-                "Phone Camera (DroidCam)"
+                "Phone Camera (DroidCam)",
+                "Simulation (generated demo frames)"
             ],
             index=0,
             key="side_cam_device"
         )
 
         target_src = "0"
+        if "Simulation" in cam_choice:
+            target_src = "SIMULATION"
+            st.caption("Generated demo events are logged with sender SIMULATION. No camera inspection is taking place.")
         if "Phone Camera" in cam_choice:
             droidcam_mode = st.radio(
                 "Connection Mode:",
@@ -867,7 +834,7 @@ def main():
 
         st.markdown('<div style="height:10px;"></div>', unsafe_allow_html=True)
         if st.button("Open Defect Test Cards", key="btn_open_test_targets", use_container_width=True):
-            test_path = os.path.abspath("test_defects.html")
+            test_path = os.path.join(BASE_DIR, "test_defects.html")
             import webbrowser
             webbrowser.open(f"file:///{test_path}")
 

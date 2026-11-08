@@ -1,128 +1,34 @@
-# Edge AI Conveyor Belt Defect Mesh Network
+# Conveyor Edge AI
 
-## Project Overview
+A local camera inspection demo: YOLO detection -> UDP telemetry -> CSV -> Streamlit dashboard. The bundled `best.pt` loads locally. Hardware accuracy and industrial reliability have not been established.
 
-The Edge AI Conveyor Belt Defect Mesh Network is a computer vision-based
-defect detection and monitoring system for conveyor belts.
+## Run
 
-The system uses an edge device with a camera to detect conveyor belt defects
-using a YOLO-based AI model. Detected defects are sent through a mesh-style
-communication system to another node, where detection results are logged.
-A Streamlit dashboard provides real-time monitoring and visualization of
-the detected defects.
-
-## System Architecture
-
-Camera
-   ↓
-Edge Node 1
-   ↓
-YOLO AI Defect Detection
-   ↓
-Mesh Alert Communication
-   ↓
-Node 2
-   ↓
-Detection Logging
-   ↓
-Streamlit Dashboard
-
-## Main Components
-
-### 1. Edge Node – AI Detection
-
-File:
-
-`edge_node_vision.py`
-
-Responsibilities:
-
-- Captures video from the camera
-- Performs defect detection using YOLO
-- Uses the trained `best.pt` model
-- Calculates detection confidence
-- Generates bounding boxes
-- Sends detected defect information to Node 2
-
-### 2. Node 2 – Alert Receiver and Logger
-
-File:
-
-`node2.py`
-
-Responsibilities:
-
-- Receives detection alerts from the edge node
-- Processes detection information
-- Saves detection records into `detections.csv`
-- Provides the detection data for dashboard monitoring
-
-### 3. Streamlit Dashboard
-
-File:
-
-`dashboard.py`
-
-Responsibilities:
-
-- Displays total detected defects
-- Displays defect statistics
-- Shows recent detections
-- Displays confidence values
-- Displays detection information from `detections.csv`
-
-## Technologies Used
-
-- Python
-- YOLO / Ultralytics
-- OpenCV
-- Streamlit
-- Pandas
-- TCP/IP Socket Communication
-- CSV Data Logging
-
-## Project Files
-
-```text
-conveyor_edge_ai/
-│
-├── best.pt
-├── dashboard.py
-├── detections.csv
-├── edge_node_vision.py
-├── node2.py
-├── README.md
-└── requirements.txt
-
-## How to Run (1-Terminal / 1-Click Execution)
-
-You only need to run **one command** in your terminal:
+Use Python 3.11–3.13. From this directory:
 
 ```powershell
-.\.venv\Scripts\python.exe -m streamlit run dashboard.py
+python -m venv .venv
+.venv\Scripts\python -m pip install -r requirements.txt
+.venv\Scripts\python -m streamlit run dashboard.py
 ```
 
-*(Or double-click `run_dashboard.bat` on Windows).*
+On macOS/Linux use `.venv/bin/python`. Windows users can also run `run_dashboard.bat`. Select a camera in the dashboard and start detection. A missing camera stops detection with an error. Select **SIMULATION** explicitly for a hardware-free demonstration; these events are labelled `SIMULATION` in telemetry and CSV.
 
-Opening the dashboard automatically manages background services (`node2.py` and `edge_node_vision.py`).
+The dashboard manages only the child processes it starts. UDP receiver defaults to loopback port 5012; video/health endpoints use loopback port 8081. Stop the dashboard's services before starting standalone processes on the same ports.
 
----
+## Standalone pipeline
 
-## Camera Setup Instructions for Users
+```sh
+python node2.py
+python edge_node_vision.py --source SIMULATION --headless --max-frames 100
+```
 
-You can choose your camera device directly inside the **⚙️ Camera Selection & Edge AI Control Center** at the top of the dashboard:
+Run the commands in separate terminals. Paths are resolved relative to the project, including when launched from another working directory. Logs are appended to `detections.csv`. Simulation events are synthetic and do not measure model accuracy. A real camera requires OS permissions and a valid camera index. UDP delivery has no persistence or delivery guarantee; this is a single-machine portfolio demo.
 
-### 1. 💻 Local Laptop Camera
-- **Setup**: None required!
-- **How to use**: Select **💻 Local Laptop Camera**, then click **▶️ Start AI Detection Node**.
+## Checks
 
-### 2. 📱 DroidCam (Phone Camera)
-- **Method A (Direct Wi-Fi IP - Easiest)**:
-  1. Open **DroidCam** on your iPhone or Android (must be on the same Wi-Fi network).
-  2. Select **📶 Wi-Fi IP Address** in the dashboard and enter the IP shown on your phone screen (e.g. `192.168.1.15:4747`).
-  3. Click **▶️ Start AI Detection Node**.
-- **Method B (USB / DroidCam PC Client)**:
-  1. Open **DroidCam** on your phone.
-  2. Open **DroidCam Client** on your PC (`C:\Program Files\DroidCam\Client\DroidCamApp.exe`).
-  3. Connect via USB or Wi-Fi and click **Start** in DroidCam Client.
-  4. Select **🔌 USB / DroidCam PC Client** in the dashboard and click **▶️ Start AI Detection Node**.
+```sh
+python -m unittest discover -s tests -v
+```
+
+Checks exercise real UDP reception, malformed payload rejection and CSV output. A recovery smoke run additionally loaded the bundled model, streamed 100 headless frames, kept the health endpoint responsive during streaming, and logged simulated alerts.

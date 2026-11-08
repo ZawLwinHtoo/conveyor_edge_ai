@@ -7,10 +7,13 @@ import sys
 import io
 import os
 import argparse
+from pathlib import Path
 import numpy as np
 from ultralytics import YOLO  # pyrefly: ignore [missing-import]
 
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', line_buffering=True)
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8', line_buffering=True)
+ROOT = Path(__file__).resolve().parent
 
 # Parse CLI arguments
 parser = argparse.ArgumentParser(description="Edge AI Vision Node")
@@ -18,6 +21,11 @@ parser.add_argument("--source", type=str, default=None, help="Camera source: 0, 
 parser.add_argument("--target", type=str, default="ALL", help="Target defect: ALL or specific defect name (e.g., 'Large Hole')")
 parser.add_argument("--conf", type=float, default=0.20, help="Confidence threshold (default: 0.20)")
 parser.add_argument("--augment", action="store_true", help="Enable Test-Time Augmentation (TTA) for enhanced sensitivity")
+parser.add_argument("--headless", action="store_true", help="Stream video without opening an OpenCV window")
+parser.add_argument("--max-frames", type=int, default=0, help="Stop after this many frames; zero means unlimited")
+parser.add_argument("--receiver-port", type=int, default=5012, help="UDP receiver port")
+parser.add_argument("--listen-port", type=int, default=5013, help="Local UDP reply listener port")
+parser.add_argument("--stream-port", type=int, default=5014, help="Local MJPEG server port")
 args = parser.parse_known_args()[0]
 
 CONF_THRESHOLD = float(args.conf) if args.conf is not None else 0.20
@@ -32,8 +40,8 @@ USE_AUGMENT = bool(args.augment)
 # Or set CAMERA_SOURCE = "http://<PHONE_IP>:8080/video" for Smartphone IP Camera
 CAMERA_SOURCE = 0
 
-MY_PORT = 5013
-NEIGHBOR_PORT = 5012
+MY_PORT = args.listen_port
+NEIGHBOR_PORT = args.receiver_port
 
 LABEL_MAP = {
     "Lubang Besar": "Large Hole",
@@ -61,9 +69,9 @@ ALERT_COOLDOWN = 1.0
 # LIVE MJPEG VIDEO STREAM SERVER (PORT 5014)
 # ============================================================
 
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
-STREAM_PORT = 5014
+STREAM_PORT = args.stream_port
 latest_jpeg_frame = None
 frame_lock = threading.Lock()
 
@@ -102,7 +110,7 @@ class MJPEGStreamHandler(BaseHTTPRequestHandler):
 
 def run_mjpeg_server():
     try:
-        server = HTTPServer(("0.0.0.0", STREAM_PORT), MJPEGStreamHandler)
+        server = ThreadingHTTPServer(("127.0.0.1", STREAM_PORT), MJPEGStreamHandler)
         server.serve_forever()
     except Exception as e:
         print(f"[STREAM] Video server notice: {e}")
@@ -178,7 +186,7 @@ def broadcast_defect_alert(
     payload = {
 
         "sender_id":
-            "Node_1_Camera",
+            "SIMULATION" if args.source and args.source.upper() == "SIMULATION" else "Node_1_Camera",
 
         "timestamp":
             time.time(),
@@ -296,7 +304,7 @@ def select_camera_device():
 
 print("[NODE 1 CV] Loading YOLO model...")
 
-model = YOLO("best.pt")
+model = YOLO(str(ROOT / "best.pt"))
 # Translate YOLO model class names to English so visual bounding boxes display in English
 if hasattr(model, "model") and hasattr(model.model, "names"):
     model.model.names = {k: LABEL_MAP.get(v, v) for k, v in model.model.names.items()}
@@ -331,7 +339,10 @@ else:
     selected_source = f"Laptop Camera ({src_idx})"
 
 if use_simulation:
-    print("[WARN] Physical camera not opened. Switching to Simulation Mode...")
+    if selected_source != "SIMULATION":
+        print("[ERROR] Camera unavailable. Detection was not started. Choose SIMULATION explicitly to run a demo.")
+        cap.release()
+        sys.exit(2)
     print("[NODE 1 CV] Starting Simulated Vision Engine.")
 else:
     print(f"[NODE 1 CV] Starting Real Vision Engine on source: {selected_source}")
@@ -578,19 +589,21 @@ current_sim_defect = None
 # MAIN COMPUTER VISION LOOP
 # ============================================================
 
-cv2.namedWindow("Node 1 - Edge AI Camera Feed", cv2.WINDOW_NORMAL)
+if not args.headless:
+    cv2.namedWindow("Node 1 - Edge AI Camera Feed", cv2.WINDOW_NORMAL)
 
 while True:
     frame_count += 1
+    if args.max_frames > 0 and frame_count > args.max_frames:
+        break
 
     if not use_simulation:
         ret, frame = cap.read()
 
         if not ret:
-            print("[WARN] Unable to read camera frame. Switching to simulation mode...")
-            use_simulation = True
+            print("[ERROR] Camera stream ended. No simulated detections will be substituted.")
             cap.release()
-            continue
+            break
 
         # If camera frame is black (e.g. Camo/DroidCam virtual camera on standby)
         if frame is not None and frame.mean() < 1.0:
@@ -757,19 +770,19 @@ while True:
         if ret_enc:
             with frame_lock:
                 latest_jpeg_frame = enc_buf.tobytes()
-            with open("latest_frame.jpg", "wb") as f:
+            with open(ROOT / "latest_frame.jpg", "wb") as f:
                 f.write(latest_jpeg_frame)
     except Exception:
         pass
 
-    cv2.imshow(
-        "Node 1 - Edge AI Camera Feed",
-        annotated_frame
-    )
-
-    key = cv2.waitKey(30) & 0xFF
+    if not args.headless:
+        cv2.imshow("Node 1 - Edge AI Camera Feed", annotated_frame)
+        key = cv2.waitKey(30) & 0xFF
+    else:
+        time.sleep(.03)
+        key = -1
     window_closed = False
-    if frame_count > 10:
+    if not args.headless and frame_count > 10:
         try:
             if cv2.getWindowProperty("Node 1 - Edge AI Camera Feed", cv2.WND_PROP_VISIBLE) < 1:
                 window_closed = True

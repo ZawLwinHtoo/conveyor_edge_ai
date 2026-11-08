@@ -1,5 +1,6 @@
 @echo off
 title Conveyor Edge AI All-In-One Dashboard
+cd /d "%~dp0"
 
 echo ========================================================
 echo   Starting Conveyor Edge AI All-In-One Dashboard...
@@ -13,6 +14,9 @@ if not exist ".venv\Scripts\python.exe" (
     .\.venv\Scripts\python.exe -m pip install -r requirements.txt
     echo.
 )
+
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+if errorlevel 1 exit /b 1
 
 echo Launching Streamlit Dashboard...
 .\.venv\Scripts\python.exe -m streamlit run dashboard.py

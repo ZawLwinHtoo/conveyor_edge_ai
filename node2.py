@@ -1,203 +1,94 @@
-import socket
-import json
-import time
-import threading
+"""Local UDP receiver and validated CSV telemetry logger."""
+from pathlib import Path
+import argparse
 import csv
-import os
-import sys
-import io
+import json
+import math
+import socket
+import threading
+import time
 
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
-
-
-# ============================================================
-# NETWORK CONFIGURATION
-# ============================================================
-
-MY_PORT = 5012
-NEIGHBOR_PORT = 5013
-
-LOG_FILE = "detections.csv"
+ROOT = Path(__file__).resolve().parent
+MY_PORT, NEIGHBOR_PORT = 5012, 5013
+LOG_FILE = ROOT / "detections.csv"
+FIELDS = ["Timestamp", "Sender ID", "Defect Type", "Confidence", "Bounding Box"]
 
 
-# ============================================================
-# SAVE DEFECT DETECTION
-# ============================================================
+def validate_message(message):
+    if not isinstance(message, dict):
+        raise ValueError("Expected an object")
+    result = dict(message)
+    for key in ("timestamp", "confidence"):
+        value = result.get(key)
+        if type(value) not in (int, float) or not math.isfinite(value):
+            raise ValueError(f"Invalid {key}")
+    if not 0 <= result["confidence"] <= 1:
+        raise ValueError("Confidence must be between zero and one")
+    for key in ("sender_id", "defect_type"):
+        if not isinstance(result.get(key), str) or not 1 <= len(result[key]) <= 80:
+            raise ValueError(f"Invalid {key}")
+    box = result.get("bounding_box", [])
+    if not isinstance(box, list) or len(box) not in (0, 4) or any(type(value) is not int or value < 0 for value in box):
+        raise ValueError("Invalid bounding box")
+    if len(box) == 4 and (box[2] < box[0] or box[3] < box[1]):
+        raise ValueError("Invalid bounding box order")
+    result["bounding_box"] = box
+    if result.get("simulation") is True:
+        result["sender_id"] = "SIMULATION"
+    return result
 
-def save_defect_log(message):
 
-    file_exists = os.path.exists(LOG_FILE)
-
-    with open(
-        LOG_FILE,
-        "a",
-        newline="",
-        encoding="utf-8"
-    ) as file:
-
+def save_defect_log(message, log_file=LOG_FILE):
+    message = validate_message(message)
+    path = Path(log_file)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    needs_header = not path.exists() or path.stat().st_size == 0
+    with path.open("a", newline="", encoding="utf-8") as file:
         writer = csv.writer(file)
-
-        # Create CSV header if file is new
-        if not file_exists or os.path.getsize(LOG_FILE) == 0:
-
-            writer.writerow([
-                "Timestamp",
-                "Sender ID",
-                "Defect Type",
-                "Confidence",
-                "Bounding Box"
-            ])
-
-        writer.writerow([
-            message.get("timestamp"),
-            message.get("sender_id"),
-            message.get("defect_type"),
-            message.get("confidence"),
-            message.get("bounding_box")
-        ])
-
-    print("[LOG] Detection saved to detections.csv")
+        if needs_header:
+            writer.writerow(FIELDS)
+        writer.writerow([message["timestamp"], message["sender_id"], message["defect_type"], message["confidence"], message["bounding_box"]])
 
 
-# ============================================================
-# TRIGGER ALARM
-# ============================================================
-
-def trigger_alert(message):
-
-    defect_type = message.get(
-        "defect_type",
-        "Unknown"
-    )
-
-    confidence = message.get(
-        "confidence",
-        0
-    )
-
-    print("\n" + "=" * 50)
-    print("[DEFECT ALERT]")
-    print(f"Defect Type : {defect_type}")
-    print(f"Confidence  : {confidence:.2f}")
-    print("=" * 50)
-
-    # Simulated alarm
-    print("[ALARM] System alert triggered.")
+def listen_for_alerts(port=MY_PORT, log_file=LOG_FILE, stop_event=None, sock=None):
+    stop_event = stop_event or threading.Event()
+    supplied_socket = sock is not None
+    sock = sock or socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        # Windows cannot query getsockname() before a UDP socket is bound.
+        if not supplied_socket:
+            sock.bind(("127.0.0.1", port))
+        sock.settimeout(.2)
+        print(f"[NODE 2] Listening on {sock.getsockname()[1]}; logging to {log_file}", flush=True)
+        while not stop_event.is_set():
+            try:
+                payload, _ = sock.recvfrom(65535)
+                message = validate_message(json.loads(payload.decode("utf-8")))
+                save_defect_log(message, log_file)
+                print(f"[LOG] {message['sender_id']}: {message['defect_type']} ({message['confidence']:.2f})", flush=True)
+            except socket.timeout:
+                continue
+            except (ValueError, UnicodeError) as error:
+                print(f"[WARN] Ignored malformed telemetry: {error}", flush=True)
+    finally:
+        sock.close()
 
 
-# ============================================================
-# LISTEN FOR NODE 1 ALERTS
-# ============================================================
-
-def listen_for_alerts():
-
-    sock = socket.socket(
-        socket.AF_INET,
-        socket.SOCK_DGRAM
-    )
-
-    sock.bind(
-        ("127.0.0.1", MY_PORT)
-    )
-
-    print(
-        f"[NODE 2] Active and listening "
-        f"on port {MY_PORT}..."
-    )
-
-    while True:
-
-        data, addr = sock.recvfrom(1024)
-
-        try:
-
-            message = json.loads(
-                data.decode("utf-8")
-            )
-
-            print(
-                "\n[MESH ALERT] Received by Node 2"
-            )
-
-            print(message)
-
-            # 1. Trigger alarm
-            trigger_alert(message)
-
-            # 2. Save detection
-            save_defect_log(message)
-
-        except json.JSONDecodeError:
-
-            print(
-                "[WARN] Invalid JSON data received."
-            )
-
-        except Exception as e:
-
-            print(
-                f"[ERROR] Error processing alert: {e}"
-            )
+def send_defect_alert(defect_type, confidence):
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.sendto(json.dumps({"sender_id": "Node_2_Camera", "timestamp": time.time(), "defect_type": defect_type, "confidence": confidence}).encode(), ("127.0.0.1", NEIGHBOR_PORT))
 
 
-# ============================================================
-# SEND DEFECT ALERT
-# ============================================================
-
-def send_defect_alert(
-    defect_type,
-    confidence
-):
-
-    sock = socket.socket(
-        socket.AF_INET,
-        socket.SOCK_DGRAM
-    )
-
-    payload = {
-
-        "sender_id":
-            "Node_2_Camera",
-
-        "timestamp":
-            time.time(),
-
-        "defect_type":
-            defect_type,
-
-        "confidence":
-            confidence
-    }
-
-    sock.sendto(
-        json.dumps(payload).encode("utf-8"),
-        ("127.0.0.1", NEIGHBOR_PORT)
-    )
-
-    print(
-        f"--> [MESH TRANSMIT] "
-        f"Sent defect alert "
-        f"({defect_type}) "
-        f"to Port {NEIGHBOR_PORT}"
-    )
-
-    sock.close()
+def main():
+    parser = argparse.ArgumentParser(description="Receive local conveyor defect telemetry")
+    parser.add_argument("--port", type=int, default=MY_PORT)
+    parser.add_argument("--log-file", type=Path, default=LOG_FILE)
+    args = parser.parse_args()
+    try:
+        listen_for_alerts(args.port, args.log_file)
+    except KeyboardInterrupt:
+        pass
 
 
-# ============================================================
-# START NODE 2
-# ============================================================
-
-threading.Thread(
-    target=listen_for_alerts,
-    daemon=True
-).start()
-
-
-# ============================================================
-# KEEP NODE 2 RUNNING
-# ============================================================
-
-while True:
-
-    time.sleep(1)
+if __name__ == "__main__":
+    main()
